@@ -28,42 +28,51 @@ from misc.utils import convert_state_dict, poly_lr_scheduler, AverageMeter
 
 torch.backends.cudnn.benchmark = True
 
-def loss_function(outputs, labels):
-    N = 512
-    L = 340
-    D = 300
-    
-    def reduce_shaper(t):
-        return torch.reshape(torch.sum(t, 1), [t.shape[0], 1])
-    
-    word_embedding = torch.FloatTensor(np.load('vector.npy'))
-    img_label = torch.zeros(N, L).scatter_(1, labels, 1)
-    img_label = img_label.cuda()
-    image_feature = outputs
-    image_feature = image_featyre.cuda()
-    v_label = torch.mul(img_label.unsqueeze(2),word_embedding)
-    ip_1 = torch.sum(torch.mul(image_feature.unsqueeze(1),v_label),2)
-    v_label_mod = torch.mul(torch.ones([N, L]).unsqueeze(2), word_embedding.unsqueeze(0))
-    mod_1 = torch.sqrt(torch.mul(torch.sum(torch.pow(image_feature,2),1).unsqueeze(1),torch.sum(torch.pow(v_label_mod,2),2)))
-    # torch.sum(torch.pow(v_label_mod,2),2)
-    cos_1 = torch.div(ip_1, mod_1)
-    #########
-    ip2 = torch.matmul(image_feature,word_embedding.t())
-    mod_2_2 = torch.sqrt(torch.matmul(reduce_shaper(torch.pow(image_feature,2)),reduce_shaper(torch.pow(word_embedding,2)).t()))
-    # reduce_shaper(torch.pow(image_feature,2)).shape
-    # mod2 = tf.select(tf.less(mod_2_2, tf.constant(0.0000001)), torch.ones([N, L]), mod_2_2)
-    temp_ones = torch.ones([N,L])
-    temp_mod2 = (mod_2_2<0.00001).float()
-    temp_mod3 = (mod_2_2>0.00001).float()
-    mod2 = torch.mul(temp_mod2,temp_ones) + torch.mul(temp_mod3,temp_ones)
-    cos_2 = torch.div(ip2, mod2)
-    margin_param = torch.rand(L,L)
-    cos_cos_1 = torch.sub(margin_param, torch.sub(cos_1.unsqueeze(2), cos_2.unsqueeze(1)))
-    cos_cos = torch.mul(cos_cos_1, img_label.unsqueeze(2))
-    cos_loss = torch.sum(F.relu(cos_cos))
+class Adptive_loss(nn.Module):
+    def __init__(self):
+        super(Adptive_loss, self).__init__()
+        self.word_embedding = torch.FloatTensor(np.load('vector.npy'))
+        #self.word_embedding.cuda()
 
-    final_cos_loss = torch.div(cos_loss, L*torch.sum(img_label))
-    return final_cos_loss
+    def reduce_shaper(self, t):
+        return torch.reshape(torch.sum(t, 1), [t.shape[0], 1])
+
+    def convert_one_hot(self, y, C):
+        return torch.eye(C)[y.reshape(-1)]
+
+    def forward(self, outputs, labels):
+        N = 512
+        L = 340
+        D = 300
+    
+        #word_embedding = word_embedding.cuda()
+        image_label = self.convert_one_hot(labels, L)
+        image_label = image_label.cuda()
+        image_feature = outputs
+        #image_feature = image_feature.cuda()
+        v_label = torch.mul(image_label.unsqueeze(2),self.word_embedding.cuda())
+        ip_1 = torch.sum(torch.mul(image_feature.unsqueeze(1),v_label),2)
+        v_label_mod = torch.mul(torch.ones([N, L]).unsqueeze(2).cuda(), self.word_embedding.unsqueeze(0).cuda())
+        mod_1 = torch.sqrt(torch.mul(torch.sum(torch.pow(image_feature,2),1).unsqueeze(1),torch.sum(torch.pow(v_label_mod,2),2)))
+        # torch.sum(torch.pow(v_label_mod,2),2)
+        cos_1 = torch.div(ip_1, mod_1)
+        #########
+        ip2 = torch.matmul(image_feature, self.word_embedding.t().cuda())
+        mod_2_2 = torch.sqrt(torch.matmul(self.reduce_shaper(torch.pow(image_feature,2)),self.reduce_shaper(torch.pow(self.word_embedding.cuda(),2)).t()))
+        # reduce_shaper(torch.pow(image_feature,2)).shape
+        # mod2 = tf.select(tf.less(mod_2_2, tf.constant(0.0000001)), torch.ones([N, L]), mod_2_2)
+        temp_ones = torch.ones([N,L])
+        temp_mod2 = (mod_2_2<0.00001).float()
+        temp_mod3 = (mod_2_2>0.00001).float()
+        mod2 = torch.mul(temp_mod2.cuda(),temp_ones.cuda()) + torch.mul(temp_mod3.cuda(),temp_ones.cuda())
+        cos_2 = torch.div(ip2, mod2)
+        margin_param = torch.rand(L,L)
+        cos_cos_1 = torch.sub(margin_param.cuda(), torch.sub(cos_1.unsqueeze(2), cos_2.unsqueeze(1)))
+        cos_cos = torch.mul(cos_cos_1, image_label.unsqueeze(2))
+        cos_loss = torch.sum(F.relu(cos_cos))
+
+        final_cos_loss = torch.div(cos_loss, L*torch.sum(image_label))
+        return final_cos_loss
     
     
     
@@ -99,6 +108,7 @@ def train(args):
     running_metrics = runningScore(n_classes)
 
     # Setup Model
+    n_classes = 300
     model = get_model(args.arch, n_classes, use_cbam=args.use_cbam)
     model.cuda()
 
@@ -158,21 +168,20 @@ def train(args):
                 scheduler.step(iter_num % (args.num_train_folds * len_trainloader // args.num_cycles)) # Cosine Annealing with Restarts
 
             images = images.cuda()
-            #labels = labels.cuda()
-            recognized = recognized.cuda()
+            labels = labels.cuda()
+            #recognized = recognized.cuda()
 
             outputs = model(images)
-            print(labels.shape)
-            print(outputs.shape)
+            a_loss = Adptive_loss().cuda()
             #loss = (loss_fn(outputs, labels.view(-1), ignore_index=t_loader.ignore_index, reduction='none') * recognized.view(-1)).mean()
-            loss = loss_function(outputs, labels)
+            loss = a_loss(outputs, labels)
             loss = loss / float(args.iter_size) # Accumulated gradients
             loss_sum = loss_sum + loss
 
             loss.backward()
 
-            if (i+1) % args.print_train_freq == 0:
-                print("Epoch [%d/%d] Iter [%6d/%6d] Loss: %.4f" % (epoch+1, args.n_epoch, i+1, len(trainloader), loss_sum))
+            #if (i+1) % args.print_train_freq == 0:
+            print("Epoch [%d/%d] Iter [%6d/%6d] Loss: %.4f" % (epoch+1, args.n_epoch, i+1, len(trainloader), loss_sum))
 
             if (i+1) % args.iter_size == 0 or i == len(trainloader) - 1:
                 optimizer.step()
