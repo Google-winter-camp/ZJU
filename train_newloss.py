@@ -38,7 +38,9 @@ def loss_function(outputs, labels):
     
     word_embedding = torch.FloatTensor(np.load('vector.npy'))
     img_label = torch.zeros(N, L).scatter_(1, labels, 1)
-    image_feature = torch.rand(N,D)
+    img_label = img_label.cuda()
+    image_feature = outputs
+    image_feature = image_featyre.cuda()
     v_label = torch.mul(img_label.unsqueeze(2),word_embedding)
     ip_1 = torch.sum(torch.mul(image_feature.unsqueeze(1),v_label),2)
     v_label_mod = torch.mul(torch.ones([N, L]).unsqueeze(2), word_embedding.unsqueeze(0))
@@ -156,13 +158,14 @@ def train(args):
                 scheduler.step(iter_num % (args.num_train_folds * len_trainloader // args.num_cycles)) # Cosine Annealing with Restarts
 
             images = images.cuda()
-            labels = labels.cuda()
+            #labels = labels.cuda()
             recognized = recognized.cuda()
 
             outputs = model(images)
-
+            print(labels.shape)
+            print(outputs.shape)
             #loss = (loss_fn(outputs, labels.view(-1), ignore_index=t_loader.ignore_index, reduction='none') * recognized.view(-1)).mean()
-            loss = loss_function(outputs, labels.view(-1))
+            loss = loss_function(outputs, labels)
             loss = loss / float(args.iter_size) # Accumulated gradients
             loss_sum = loss_sum + loss
 
