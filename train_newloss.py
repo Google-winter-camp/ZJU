@@ -1,11 +1,3 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-"""
-Created on Tue Jan 15 22:23:43 2019
-
-@author: shallow
-"""
-
 import sys, os
 import cv2
 import torch
@@ -28,55 +20,10 @@ from misc.utils import convert_state_dict, poly_lr_scheduler, AverageMeter
 
 torch.backends.cudnn.benchmark = True
 
-class Adptive_loss(nn.Module):
-    def __init__(self):
-        super(Adptive_loss, self).__init__()
-        self.word_embedding = torch.FloatTensor(np.load('vector.npy'))
-        #self.word_embedding.cuda()
 
-    def reduce_shaper(self, t):
-        return torch.reshape(torch.sum(t, 1), [t.shape[0], 1])
+def convert_one_hot(y, C):
+    return torch.eye(C)[y.reshape(-1)]
 
-    def convert_one_hot(self, y, C):
-        return torch.eye(C)[y.reshape(-1)]
-
-    def forward(self, outputs, labels):
-        N = 512
-        L = 340
-        D = 300
-    
-        #word_embedding = word_embedding.cuda()
-        image_label = self.convert_one_hot(labels, L)
-        image_label = image_label.cuda()
-        image_feature = outputs
-        #image_feature = image_feature.cuda()
-        v_label = torch.mul(image_label.unsqueeze(2),self.word_embedding.cuda())
-        ip_1 = torch.sum(torch.mul(image_feature.unsqueeze(1),v_label),2)
-        v_label_mod = torch.mul(torch.ones([N, L]).unsqueeze(2).cuda(), self.word_embedding.unsqueeze(0).cuda())
-        mod_1 = torch.sqrt(torch.mul(torch.sum(torch.pow(image_feature,2),1).unsqueeze(1),torch.sum(torch.pow(v_label_mod,2),2)))
-        # torch.sum(torch.pow(v_label_mod,2),2)
-        cos_1 = torch.div(ip_1, mod_1)
-        #########
-        ip2 = torch.matmul(image_feature, self.word_embedding.t().cuda())
-        mod_2_2 = torch.sqrt(torch.matmul(self.reduce_shaper(torch.pow(image_feature,2)),self.reduce_shaper(torch.pow(self.word_embedding.cuda(),2)).t()))
-        # reduce_shaper(torch.pow(image_feature,2)).shape
-        # mod2 = tf.select(tf.less(mod_2_2, tf.constant(0.0000001)), torch.ones([N, L]), mod_2_2)
-        temp_ones = torch.ones([N,L])
-        temp_mod2 = (mod_2_2<0.00001).float()
-        temp_mod3 = (mod_2_2>0.00001).float()
-        mod2 = torch.mul(temp_mod2.cuda(),temp_ones.cuda()) + torch.mul(temp_mod3.cuda(),temp_ones.cuda())
-        cos_2 = torch.div(ip2, mod2)
-        margin_param = torch.rand(L,L)
-        cos_cos_1 = torch.sub(margin_param.cuda(), torch.sub(cos_1.unsqueeze(2), cos_2.unsqueeze(1)))
-        cos_cos = torch.mul(cos_cos_1, image_label.unsqueeze(2))
-        cos_loss = torch.sum(F.relu(cos_cos))
-
-        final_cos_loss = torch.div(cos_loss, L*torch.sum(image_label))
-        return final_cos_loss
-    
-    
-    
-    
 
 def train(args):
     if not os.path.exists('checkpoints'):
@@ -84,16 +31,19 @@ def train(args):
 
     # Setup Augmentations
     data_aug = transforms.Compose([
-                    transforms.ToPILImage(),
-                    transforms.RandomHorizontalFlip(p=0.5),
-                    transforms.RandomAffine(degrees=10, translate=(0.05, 0.05), scale=(0.95, 1.05)),
-                ])
+        transforms.ToPILImage(),
+        transforms.RandomHorizontalFlip(p=0.5),
+        transforms.RandomAffine(degrees=10, translate=(0.05, 0.05), scale=(0.95, 1.05)),
+    ])
 
     # Setup Dataloader
     data_loader = get_loader(args.dataset)
     data_path = get_data_path(args.dataset)
-    t_loader = data_loader(data_path, is_transform=True, split='train', version='simplified', img_size=(args.img_rows, args.img_cols), augmentations=data_aug, train_fold_num=args.train_fold_num, num_train_folds=args.num_train_folds, seed=args.seed)
-    v_loader = data_loader(data_path, is_transform=True, split='val', version='simplified', img_size=(args.img_rows, args.img_cols), num_val=args.num_val, seed=args.seed)
+    t_loader = data_loader(data_path, is_transform=True, split='train', version='simplified',
+                           img_size=(args.img_rows, args.img_cols), augmentations=data_aug,
+                           train_fold_num=args.train_fold_num, num_train_folds=args.num_train_folds, seed=args.seed)
+    v_loader = data_loader(data_path, is_transform=True, split='val', version='simplified',
+                           img_size=(args.img_rows, args.img_cols), num_val=args.num_val, seed=args.seed)
 
     random.seed(args.seed)
     np.random.seed(args.seed)
@@ -101,14 +51,14 @@ def train(args):
     torch.cuda.manual_seed(args.seed)
 
     n_classes = t_loader.n_classes
-    trainloader = data.DataLoader(t_loader, batch_size=args.batch_size, num_workers=2, shuffle=True, pin_memory=True, drop_last=True)
+    trainloader = data.DataLoader(t_loader, batch_size=args.batch_size, num_workers=2, shuffle=True, pin_memory=True,
+                                  drop_last=True)
     valloader = data.DataLoader(v_loader, batch_size=args.batch_size, num_workers=2, pin_memory=True)
 
     # Setup Metrics
     running_metrics = runningScore(n_classes)
 
     # Setup Model
-    n_classes = 300
     model = get_model(args.arch, n_classes, use_cbam=args.use_cbam)
     model.cuda()
 
@@ -117,10 +67,13 @@ def train(args):
         optimizer = model.optimizer
     else:
         ##optimizer = torch.optim.SGD(filter(lambda p: p.requires_grad, model.parameters()), lr=args.l_rate, momentum=args.momentum, weight_decay=args.weight_decay)
-        optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, model.parameters()), lr=args.l_rate, weight_decay=args.weight_decay)
+        optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, model.parameters()), lr=args.l_rate,
+                                     weight_decay=args.weight_decay)
         if args.num_cycles > 0:
-            len_trainloader = int(5e6) # 4960414
-            scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.num_train_folds*len_trainloader//args.num_cycles, eta_min=args.l_rate*1e-1)
+            len_trainloader = int(5e6)  # 4960414
+            scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer,
+                                                                   T_max=args.num_train_folds * len_trainloader // args.num_cycles,
+                                                                   eta_min=args.l_rate * 1e-1)
         else:
             scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=[2, 4, 6, 8], gamma=0.5)
 
@@ -131,7 +84,7 @@ def train(args):
         loss_fn = F.cross_entropy
 
     start_epoch = 0
-    if args.resume is not None:                                         
+    if args.resume is not None:
         if os.path.isfile(args.resume):
             print("Loading model and optimizer from checkpoint '{}'".format(args.resume))
             checkpoint = torch.load(args.resume)
@@ -142,16 +95,17 @@ def train(args):
             else:
                 model_dict.update(convert_state_dict(checkpoint['model_state'], load_classifier=args.load_classifier))
 
-                print("Loaded checkpoint '{}' (epoch {}, mapk {:.5f}, top1_acc {:7.3f}, top2_acc {:7.3f} top3_acc {:7.3f})"
-                      .format(args.resume, checkpoint['epoch'], checkpoint['mapk'], checkpoint['top1_acc'], checkpoint['top2_acc'], checkpoint['top3_acc']))
+                print(
+                    "Loaded checkpoint '{}' (epoch {}, mapk {:.5f}, top1_acc {:7.3f}, top2_acc {:7.3f} top3_acc {:7.3f})"
+                        .format(args.resume, checkpoint['epoch'], checkpoint['mapk'], checkpoint['top1_acc'],
+                                checkpoint['top2_acc'], checkpoint['top3_acc']))
             model.load_state_dict(model_dict)
 
             if checkpoint.get('optimizer_state', None) is not None:
                 optimizer.load_state_dict(checkpoint['optimizer_state'])
                 start_epoch = checkpoint['epoch']
         else:
-            print("No checkpoint found at '{}'".format(args.resume)) 
-
+            print("No checkpoint found at '{}'".format(args.resume))
 
     loss_sum = 0.0
     for epoch in range(start_epoch, args.n_epoch):
@@ -165,30 +119,44 @@ def train(args):
         for i, (images, labels, recognized, _) in enumerate(trainloader):
             if args.num_cycles > 0:
                 iter_num = i + epoch * len_trainloader
-                scheduler.step(iter_num % (args.num_train_folds * len_trainloader // args.num_cycles)) # Cosine Annealing with Restarts
+                scheduler.step(iter_num % (
+                        args.num_train_folds * len_trainloader // args.num_cycles))  # Cosine Annealing with Restarts
 
             images = images.cuda()
             labels = labels.cuda()
-            #recognized = recognized.cuda()
+            recognized = recognized.cuda()
 
             outputs = model(images)
-            a_loss = Adptive_loss().cuda()
-            #loss = (loss_fn(outputs, labels.view(-1), ignore_index=t_loader.ignore_index, reduction='none') * recognized.view(-1)).mean()
-            loss = a_loss(outputs, labels)
-            loss = loss / float(args.iter_size) # Accumulated gradients
+            ##YFF
+            img_lables = convert_one_hot(labels, 340)
+            word_embedding = torch.FloatTensor(np.load('vector.npy'))
+            ip1 = torch.matmul(word_embedding, word_embedding.t())
+            vi = torch.sum(torch.pow(word_embedding, 2), 1)
+            mod = torch.sqrt(torch.matmul(vi.unsqueeze(1), vi.unsqueeze(0)))
+            margin_parm = 1 - torch.div(ip1, mod)
+            msk = torch.matmul(img_lables, margin_parm).t()
+            stfmax = torch.nn.Softmax(dim=1)
+            outputs_feature = stfmax(outputs)
+            add_loss = torch.sum(torch.mul(torch.mul(outputs_feature, msk), torch.eye(340, 340)))
+
+            ##YFF
+
+            loss = (loss_fn(outputs, labels.view(-1), ignore_index=t_loader.ignore_index,
+                            reduction='none') * recognized.view(-1)).mean()
+            loss = loss / float(args.iter_size)  # Accumulated gradients
             loss_sum = loss_sum + loss
 
             loss.backward()
 
-            #if (i+1) % args.print_train_freq == 0:
-            print("Epoch [%d/%d] Iter [%6d/%6d] Loss: %.4f" % (epoch+1, args.n_epoch, i+1, len(trainloader), loss_sum))
+            if (i + 1) % args.print_train_freq == 0:
+                print("Epoch [%d/%d] Iter [%6d/%6d] Loss: %.4f" % (
+                    epoch + 1, args.n_epoch, i + 1, len(trainloader), loss_sum))
 
-            if (i+1) % args.iter_size == 0 or i == len(trainloader) - 1:
+            if (i + 1) % args.iter_size == 0 or i == len(trainloader) - 1:
                 optimizer.step()
                 optimizer.zero_grad()
                 loss_sum = 0.0
-        
-        '''
+
         mapk_val = AverageMeter()
         top1_acc_val = AverageMeter()
         top2_acc_val = AverageMeter()
@@ -203,7 +171,8 @@ def train(args):
 
                 outputs_val = model(images_val)
 
-                loss_val = (loss_fn(outputs_val, labels_val.view(-1), ignore_index=v_loader.ignore_index, reduction='none') * recognized_val.view(-1)).mean()
+                loss_val = (loss_fn(outputs_val, labels_val.view(-1), ignore_index=v_loader.ignore_index,
+                                    reduction='none') * recognized_val.view(-1)).mean()
                 mean_loss_val.update(loss_val, n=images_val.size(0))
 
                 _, pred = outputs_val.topk(k=3, dim=1, largest=True, sorted=True)
@@ -218,25 +187,29 @@ def train(args):
                 mapk_val.update(mapk_v, n=images_val.size(0))
 
         print('Mean Average Precision (MAP) @ 3: {:.5f}'.format(mapk_val.avg))
-        print('Top 3 accuracy: {:7.3f} / {:7.3f} / {:7.3f}'.format(top1_acc_val.avg, top2_acc_val.avg, top3_acc_val.avg))
+        print(
+            'Top 3 accuracy: {:7.3f} / {:7.3f} / {:7.3f}'.format(top1_acc_val.avg, top2_acc_val.avg, top3_acc_val.avg))
         print('Mean val loss: {:.4f}'.format(mean_loss_val.avg))
-        
+
         score, class_iou = running_metrics.get_scores()
 
         for k, v in score.items():
             print(k, v)
 
-        #for i in range(n_classes):
+        # for i in range(n_classes):
         #    print(i, class_iou[i])
 
-        state = {'epoch': epoch+1,
+        state = {'epoch': epoch + 1,
                  'model_state': model.state_dict(),
                  'optimizer_state': optimizer.state_dict(),
                  'mapk': mapk_val.avg,
                  'top1_acc': top1_acc_val.avg,
                  'top2_acc': top2_acc_val.avg,
-                 'top3_acc': top3_acc_val.avg,}
-        torch.save(state, "checkpoints/{}_{}_{}_{}x{}_{}-{}-{}_model.pth".format(args.arch, args.dataset, epoch+1, args.img_rows, args.img_cols, args.train_fold_num, args.num_train_folds, args.num_val))
+                 'top3_acc': top3_acc_val.avg, }
+        torch.save(state, "checkpoints/{}_{}_{}_{}x{}_{}-{}-{}_model.pth".format(args.arch, args.dataset, epoch + 1,
+                                                                                 args.img_rows, args.img_cols,
+                                                                                 args.train_fold_num,
+                                                                                 args.num_train_folds, args.num_val))
 
         running_metrics.reset()
         mapk_val.reset()
@@ -244,36 +217,35 @@ def train(args):
         top2_acc_val.reset()
         top3_acc_val.reset()
         mean_loss_val.reset()
-        '''
-        elapsed_train_time = timeit.default_timer() - start_train_time
-        print('Training time (epoch {0:5d}): {1:10.5f} seconds'.format(epoch+1, elapsed_train_time))
 
+        elapsed_train_time = timeit.default_timer() - start_train_time
+        print('Training time (epoch {0:5d}): {1:10.5f} seconds'.format(epoch + 1, elapsed_train_time))
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Hyperparams')
-    parser.add_argument('--arch', nargs='?', type=str, default='MobileNetV2', 
+    parser.add_argument('--arch', nargs='?', type=str, default='MobileNetV2',
                         help='Architecture to use [\'fcn8s, unet, segnet, pspnet, icnet, etc\']')
-    parser.add_argument('--dataset', nargs='?', type=str, default='quickdraw', 
+    parser.add_argument('--dataset', nargs='?', type=str, default='quickdraw',
                         help='Dataset to use [\'pascal, camvid, ade20k, cityscapes, etc\']')
-    parser.add_argument('--img_rows', nargs='?', type=int, default=128, 
+    parser.add_argument('--img_rows', nargs='?', type=int, default=128,
                         help='Height of the input image')
-    parser.add_argument('--img_cols', nargs='?', type=int, default=128, 
+    parser.add_argument('--img_cols', nargs='?', type=int, default=128,
                         help='Width of the input image')
 
-    parser.add_argument('--n_epoch', nargs='?', type=int, default=10, 
+    parser.add_argument('--n_epoch', nargs='?', type=int, default=10,
                         help='# of the epochs')
-    parser.add_argument('--batch_size', nargs='?', type=int, default=512, 
+    parser.add_argument('--batch_size', nargs='?', type=int, default=512,
                         help='Batch Size')
-    parser.add_argument('--l_rate', nargs='?', type=float, default=1e-3, 
+    parser.add_argument('--l_rate', nargs='?', type=float, default=1e-3,
                         help='Learning Rate')
-    parser.add_argument('--momentum', nargs='?', type=float, default=0.9, 
+    parser.add_argument('--momentum', nargs='?', type=float, default=0.9,
                         help='Momentum')
-    parser.add_argument('--weight_decay', nargs='?', type=float, default=1e-4, 
+    parser.add_argument('--weight_decay', nargs='?', type=float, default=1e-4,
                         help='Weight Decay')
     parser.add_argument('--iter_size', nargs='?', type=int, default=2,
                         help='Batch size for accumulated gradients')
-    parser.add_argument('--resume', nargs='?', type=str, default=None,    
+    parser.add_argument('--resume', nargs='?', type=str, default=None,
                         help='Path to previous saved model to restart from')
 
     parser.add_argument('--load_classifier', dest='load_classifier', action='store_true',
@@ -288,9 +260,9 @@ if __name__ == '__main__':
                         help='Disable to use CBAM | True by default')
     parser.set_defaults(use_cbam=True)
 
-    parser.add_argument('--seed', nargs='?', type=int, default=1234, 
+    parser.add_argument('--seed', nargs='?', type=int, default=1234,
                         help='Random seed')
-    parser.add_argument('--num_cycles', nargs='?', type=int, default=1, 
+    parser.add_argument('--num_cycles', nargs='?', type=int, default=1,
                         help='Cosine Annealing Cyclic LR')
 
     parser.add_argument('--train_fold_num', nargs='?', type=int, default=0,
